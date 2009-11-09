@@ -10,7 +10,10 @@
 
 .global kprobe_measure_init
 .global kprobe_measure_main
+.global kprobe_exec_init
+.global kprobe_exec_main
 .global kprobe
+.global kprobe_probe
 
 bak_r0: .word 0
 bak_r1: .word 0
@@ -43,6 +46,7 @@ ctx_r11: .word 0
 ctx_r12: .word 0
 ctx_r13: .word 0
 ctx_r14: .word 0
+ctx_r15: .word 0 // read only!!
 
 timer0: .word 0
 
@@ -92,7 +96,7 @@ kprobe:
 	str r1, [r4, #REG_IF]        // signal timer0 in IF
 	mov r1, #1
 	str r1, [r4, #REG_IME]       // enable IME
-	mov r1, #0x00C00000          // enable timer0 IRQ and start
+	ldr r1, =0x00C0FF00          // enable timer0 IRQ and start
 	str r1, [r4, #REG_TIMER0]    // write enable to timer
 
 	// interrupt could occur any time from here on
@@ -128,6 +132,8 @@ kprobe_irq:
 	str r1, [r4, #REG_IME]       // enable interrupts
 	
 	adr r1, kprobe_return + 4    // rebranch interrupt return
+	ldr r0, [sp, #5*4]
+	str r0, ctx_r15
 	str r1, [sp, #5*4]
 	bx lr
 
@@ -144,9 +150,20 @@ kprobe_measure_init:
 	mov pc, lr
 
 kprobe_measure_main:
-	add r0, #1
-	b kprobe_measure_main
+	adds r0, #1
+	bne kprobe_measure_main
+1:  b 1b
 
 
+kprobe_exec_main:
+	adr r1, l2
+	mov r9, #0
+l1:	subs r0, #1
+l2:	bne l1
+kprobe_probe:
+	nop
+	// this security catch only triggers for non branching instructions
+	mov r0, #-1
+l3:  b l3
 
 
