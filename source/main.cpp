@@ -26,6 +26,7 @@ u32 exceptions;
 void kprobe_exec_init(registers *regs)
 {
 	regs->gpr[0] = wait_cycles;
+	regs->gpr[1] = 0xbadc0de; // init for testing
 }
 
 registers* kprobe_hl()
