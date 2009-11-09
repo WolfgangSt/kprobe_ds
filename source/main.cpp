@@ -2,7 +2,19 @@
 #include <stdio.h>
 
 extern "C" {
-u32 kprobe_entry(); 
+	
+struct registers
+{
+	u32 gpr[16];
+};
+
+typedef void (*kprobe_init)(registers *regs);
+typedef void (*kprobe_main)(void);
+
+void kprobe_measure_init(registers *regs);
+void kprobe_measure_main();
+registers* kprobe(kprobe_init pre, kprobe_main main); 
+
 }
 
 u32 clocks, cmin, cmax, iter;
@@ -34,7 +46,8 @@ int main(void)
 
 	for (;;)
 	{
-		clocks = kprobe_entry();
+		registers *regs = kprobe(kprobe_measure_init, kprobe_measure_main);
+		clocks = regs->gpr[0];
 		iter++;
 		if (clocks > cmax)
 			cmax = clocks;

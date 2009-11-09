@@ -1,12 +1,50 @@
 .text
 .align
+.cpu arm946e-s
 
 .equ REG_IME, 0x208
 .equ REG_IE, 0x210
 .equ REG_IF, 0x214
 .equ REG_DISPSTAT, 0x4
+.equ REG_TIMER0, 0x100
 
-.global kprobe_entry
+.global kprobe_measure_init
+.global kprobe_measure_main
+.global kprobe
+
+bak_r0: .word 0
+bak_r1: .word 0
+bak_r2: .word 0
+bak_r3: .word 0
+bak_r4: .word 0
+bak_r5: .word 0
+bak_r6: .word 0
+bak_r7: .word 0
+bak_r8: .word 0
+bak_r9: .word 0
+bak_r10: .word 0
+bak_r11: .word 0
+bak_r12: .word 0
+bak_r13: .word 0
+bak_r14: .word 0
+
+ctx_r0: .word 0
+ctx_r1: .word 0
+ctx_r2: .word 0
+ctx_r3: .word 0
+ctx_r4: .word 0
+ctx_r5: .word 0
+ctx_r6: .word 0
+ctx_r7: .word 0
+ctx_r8: .word 0
+ctx_r9: .word 0
+ctx_r10: .word 0
+ctx_r11: .word 0
+ctx_r12: .word 0
+ctx_r13: .word 0
+ctx_r14: .word 0
+
+timer0: .word 0
 
 load_dtcm:
 	mrc	p15, 0, r1, c9, c1,0	
@@ -15,113 +53,99 @@ load_dtcm:
 	add r1, #0x4000	
 	mov pc, lr
 
-kprobe_return:
-	mov r0, r9
-	ldmfd sp!, {r1,r4,r9,lr}
-	bx lr
 
-kprobe_hblank:
-	stmfd sp!, {r0,r1,r4,lr}
-	mov r4, #0x4000000
-	mov r0, #0
-	
-	// disable interrupts
-	str r0, [r4, #REG_IME]
-	
-	// reload old DISPSTAT
-	ldr r1, old_DISPSTAT
-	strh r1, [r4, #REG_DISPSTAT]
-	
-	// reload old IE
-	ldr r1, old_IE
-	str r1, [r4, #REG_IE]
-	
-	// reset the trapped PC
-	//adr r1, kprobe_return_addr
-	//ldrt pc, [r1]
-	
-	// restore original IRQ handler
-	ldr r0, old_IRQ
-	bl load_dtcm
-	str r0, [r1, #-4]
-	
-	// restore original IE
-	ldr r1, old_IE
-	str r1, [r4, #REG_IE]
-	
-	// enable interrupts
-	mov r1, #1
-	str r1, [r4, #REG_IME]
-	
-	adr r1, kprobe_return + 4
-	str r1, [sp, #9*4]
-	
-	ldmfd sp!, {r0,r1,r4,lr}	
-	bx lr
-	
-	
 .align
 old_IE: .word 0x1000beef
 old_IRQ: .word 0x2000beef
-old_DISPSTAT: .word 0x3000beef
+old_IME: .word 0x4000beef
 .pool
 
-kprobe_entry:
-	stmfd sp!, {r1,r4,r9,lr}
+// r0 = pre handler 
+// r1 = execution handler (measure/exec)
+
+kprobe:
+	// backup calling context
+	str r0, bak_r0
+	adr r0, bak_r0
+	stmib r0, {r1-r14}
+	
+	
+	adr r0, ctx_r0               // load context address
+	ldr r1, bak_r0               // load pre handler
+	blx r1                       // invoke pre handler to load context
+	
 	mov r4, #0x4000000
 	mov r0, #0
-	
-	// disable interrupts
-	str r0, [r4, #REG_IME]
-	
-	// backup original DISPSTAT
-	ldrh r1, [r4, #REG_DISPSTAT]
-	
-	str r1, old_DISPSTAT
-	orr r1, #0x10
-	strh r1, [r4, #REG_DISPSTAT]
-	
-	// backup original IE
-	ldr r1, [r4, #REG_IE]
-	str r1, old_IE
-	
-	// mask IE
-	str r0, [r4, #REG_IE]
-	
-	// backup old and load new IRQ handler
-	bl load_dtcm
-	ldr r0,[r1, #-4]
-	str r0, old_IRQ
-	adr r0, kprobe_hblank
-	str r0,[r1, #-4]
-
-	// hblank spinlocks
-hspin0: // spin while hblank is 1
-	ldr  r1, [r4, #0x4]
-	ands r1, r1, #2
-	bne hspin0
-hspin1: // spin while hblank is 0
-	ldr  r1, [r4, #0x4]
-	ands r1, r1, #2
-	beq hspin1
-	
-	// reset counter and enable hblank interrupt
-	mov r9, #0
-	mov r1, #2
-	str r1, [r4, #REG_IE]
-	str r1, [r4, #REG_IF]
+	str r0, [r4, #REG_IME]       // disable interrupts
+	ldr r1, [r4, #REG_IE]        // load original IE
+	str r1, old_IE               // back up IE
+	ldr r1, [r4, #REG_TIMER0]    // load timer0
+	str r1, timer0               // backup timer0
+	str r0, [r4, #REG_TIMER0]    // reset timer0
+	bl load_dtcm                 // load dtcm to r1
+	ldr r0,[r1, #-4]             // load old IRQ handler
+	str r0, old_IRQ              // back up old IRQ handler
+	adr r0, kprobe_irq           // load new IRQ handler
+	str r0,[r1, #-4]             // write new IRQ handler
+	mov r1, #8
+	str r1, [r4, #REG_IE]        // set IE to timer0 only
+	str r1, [r4, #REG_IF]        // signal timer0 in IF
 	mov r1, #1
-	str r1, [r4, #REG_IME]
-	
+	str r1, [r4, #REG_IME]       // enable IME
+	mov r1, #0x00C00000          // enable timer0 IRQ and start
+	str r1, [r4, #REG_TIMER0]    // write enable to timer
 
-// right here hblank has been toggled to 1 and we might have consumed some cycles
-// thus time till next blank is at most 272 cycles (hblank time)
-.rept 4096
-	add r9, #1
-.endr
-cycling:
-	add r9, #1
-	b cycling // shouldnt reach this if so increase unrolling above
+	// interrupt could occur any time from here on
+	adr r0, ctx_r0               // load ctx to registers
+	ldmib r0, {r1-r14}           //
+	ldr r0, ctx_r0               //
+	ldr pc, bak_r1               // jump to probecode
+
+
+// entering here after probe has been interrupted
+kprobe_irq:
+	ldmia sp, {r0-r3}            // restore regs except sp from BIOS handler
+	str r0, ctx_r0               // backup context for inspection callback
+	adr r0, ctx_r0
+	stmib r0, {r1-r14}
+	
+	// restore original environment
+	mov r4, #0x4000000
+	mov r0, #0
+	str r0, [r4, #REG_IME]       // disable interrupts
+	ldr r1, old_IE               // reload old IE
+	str r1, [r4, #REG_IE]        // reset old IE
+	ldr r1, timer0               // reload timer0
+	str r1, [r4, #REG_TIMER0]    // reset timer0
+	mov r0, lr
+	bl load_dtcm                 // load dtcm to r1
+	mov lr, r0
+	ldr r0, old_IRQ              // load old IRQ handler
+	str r0, [r1, #-4]            // restore old IRQ handler
+	ldr r1, old_IE               // load old IE
+	str r1, [r4, #REG_IE]        // restore old IE	
+	mov r1, #1
+	str r1, [r4, #REG_IME]       // enable interrupts
+	
+	adr r1, kprobe_return + 4    // rebranch interrupt return
+	str r1, [sp, #5*4]
+	bx lr
+
+// entering here after IRQ cleanup
+kprobe_return:
+	adr r0, bak_r0               // load bak to registers
+	ldmib r0, {r1-r14}           //
+	adr r0, ctx_r0               //
+	bx lr                        // return to callee
+
+kprobe_measure_init:
+	mov r1, #0
+	str r1, [r0]
+	mov pc, lr
+
+kprobe_measure_main:
+	add r0, #1
+	b kprobe_measure_main
 
 
 
